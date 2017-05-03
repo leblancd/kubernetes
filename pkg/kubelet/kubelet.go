@@ -1434,10 +1434,16 @@ func (kl *Kubelet) GetClusterDNS(pod *v1.Pod) ([]string, []string, bool, error) 
 		// local machine". A nameserver setting of localhost is equivalent to
 		// this documented behavior.
 		if kl.resolverConfig == "" {
-			hostDNS = []string{"127.0.0.1"}
-			hostSearch = []string{"."}
-		} else {
-			hostSearch = kl.formDNSSearchForDNSDefault(hostSearch, pod)
+			switch {
+			case kl.nodeIP == nil || kl.nodeIP.To4() != nil:
+				hostDNS = []string{"127.0.0.1"}
+				hostSearch = []string{"."}
+			case kl.nodeIP.To16() != nil:
+				hostDNS = []string{"::1"}
+				hostSearch = []string{"."}
+			default:
+				hostSearch = kl.formDNSSearchForDNSDefault(hostSearch, pod)
+			}
 		}
 		return hostDNS, hostSearch, useClusterFirstPolicy, nil
 	}
