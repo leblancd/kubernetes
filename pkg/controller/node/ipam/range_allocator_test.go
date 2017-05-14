@@ -311,6 +311,7 @@ func TestReleaseCIDRSuccess(t *testing.T) {
 			cidrsToRelease:                   []string{"127.123.234.0/30"},
 			expectedAllocatedCIDRSecondRound: "127.123.234.0/30",
 		},
+
 	}
 
 	testFunc := func(tc struct {
