@@ -72,6 +72,26 @@ func TestAllocateOrOccupyCIDRSuccess(t *testing.T) {
 			expectedAllocatedCIDR: "127.123.234.0/30",
 		},
 		{
+			description: "When there's no V6 ServiceCIDR return first CIDR in V6 range",
+			fakeNodeHandler: &testutil.FakeNodeHandler{
+				Existing: []*v1.Node{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "node0",
+						},
+					},
+				},
+				Clientset: fake.NewSimpleClientset(),
+			},
+			clusterCIDR: func() *net.IPNet {
+				_, clusterCIDR, _ := net.ParseCIDR("2001::/56")
+				return clusterCIDR
+			}(),
+			serviceCIDR:           nil,
+			subNetMaskSize:        64,
+			expectedAllocatedCIDR: "2001::/64",
+		},
+		{
 			description: "Correctly filter out ServiceCIDR",
 			fakeNodeHandler: &testutil.FakeNodeHandler{
 				Existing: []*v1.Node{

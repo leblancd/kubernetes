@@ -26,6 +26,7 @@ import (
 	_ "net/http/pprof"
 	"runtime"
 	"strconv"
+	"syscall"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -63,20 +64,23 @@ import (
 )
 
 type ProxyServer struct {
-	Client       clientset.Interface
-	EventClient  v1core.EventsGetter
-	Config       *options.ProxyServerConfig
-	IptInterface utiliptables.Interface
-	Proxier      proxy.ProxyProvider
-	Broadcaster  record.EventBroadcaster
-	Recorder     record.EventRecorder
-	Conntracker  Conntracker // if nil, ignored
-	ProxyMode    string
+	Client        clientset.Interface
+	EventClient   v1core.EventsGetter
+	Config        *options.ProxyServerConfig
+	IptInterface4 utiliptables.Interface
+	IptInterface6 utiliptables.Interface
+	Proxier       proxy.ProxyProvider
+	Broadcaster   record.EventBroadcaster
+	Recorder      record.EventRecorder
+	Conntracker   Conntracker // if nil, ignored
+	ProxyMode     string
 }
 
 const (
 	proxyModeUserspace = "userspace"
 	proxyModeIPTables  = "iptables"
+	familyV4           = syscall.AF_INET
+	familyV6           = syscall.AF_INET6
 )
 
 func checkKnownProxyMode(proxyMode string) bool {
@@ -91,7 +95,8 @@ func NewProxyServer(
 	client clientset.Interface,
 	eventClient v1core.EventsGetter,
 	config *options.ProxyServerConfig,
-	iptInterface utiliptables.Interface,
+	iptInterface4 utiliptables.Interface,
+	iptInterface6 utiliptables.Interface,
 	proxier proxy.ProxyProvider,
 	broadcaster record.EventBroadcaster,
 	recorder record.EventRecorder,
@@ -99,15 +104,16 @@ func NewProxyServer(
 	proxyMode string,
 ) (*ProxyServer, error) {
 	return &ProxyServer{
-		Client:       client,
-		EventClient:  eventClient,
-		Config:       config,
-		IptInterface: iptInterface,
-		Proxier:      proxier,
-		Broadcaster:  broadcaster,
-		Recorder:     recorder,
-		Conntracker:  conntracker,
-		ProxyMode:    proxyMode,
+		Client:        client,
+		EventClient:   eventClient,
+		Config:        config,
+		IptInterface4: iptInterface4,
+		IptInterface6: iptInterface6,
+		Proxier:       proxier,
+		Broadcaster:   broadcaster,
+		Recorder:      recorder,
+		Conntracker:   conntracker,
+		ProxyMode:     proxyMode,
 	}, nil
 }
 
@@ -138,13 +144,9 @@ func NewProxyServerDefault(config *options.ProxyServerConfig) (*ProxyServer, err
 	} else {
 		glog.Errorf("unable to register configz: %s", err)
 	}
-	protocol := utiliptables.ProtocolIpv4
-	if net.ParseIP(config.BindAddress).To4() == nil {
-		protocol = utiliptables.ProtocolIpv6
-	}
 
 	var netshInterface utilnetsh.Interface
-	var iptInterface utiliptables.Interface
+	var iptInterface4, iptInterface6 utiliptables.Interface
 	var dbus utildbus.Interface
 
 	// Create a iptables utils.
@@ -154,14 +156,16 @@ func NewProxyServerDefault(config *options.ProxyServerConfig) (*ProxyServer, err
 		netshInterface = utilnetsh.New(execer)
 	} else {
 		dbus = utildbus.New()
-		iptInterface = utiliptables.New(execer, dbus, protocol)
+		iptInterface4 = utiliptables.New(execer, dbus, utiliptables.ProtocolIpv4)
+		iptInterface6 = utiliptables.New(execer, dbus, utiliptables.ProtocolIpv6)
 	}
 
 	// We omit creation of pretty much everything if we run in cleanup mode
 	if config.CleanupAndExit {
 		return &ProxyServer{
-			Config:       config,
-			IptInterface: iptInterface,
+			Config:        config,
+			IptInterface4: iptInterface4,
+			IptInterface6: iptInterface6,
 		}, nil
 	}
 
@@ -220,7 +224,7 @@ func NewProxyServerDefault(config *options.ProxyServerConfig) (*ProxyServer, err
 	var proxier proxy.ProxyProvider
 	var endpointsHandler proxyconfig.EndpointsConfigHandler
 
-	proxyMode := getProxyMode(string(config.Mode), client.Core().Nodes(), hostname, iptInterface, iptables.LinuxKernelCompatTester{})
+	proxyMode := getProxyMode(string(config.Mode), client.Core().Nodes(), hostname, iptInterface4, iptInterface6, iptables.LinuxKernelCompatTester{})
 	if proxyMode == proxyModeIPTables {
 		glog.V(0).Info("Using iptables Proxier.")
 		if config.IPTablesMasqueradeBit == nil {
@@ -228,14 +232,16 @@ func NewProxyServerDefault(config *options.ProxyServerConfig) (*ProxyServer, err
 			return nil, fmt.Errorf("Unable to read IPTablesMasqueradeBit from config")
 		}
 		proxierIPTables, err := iptables.NewProxier(
-			iptInterface,
+			iptInterface4,
+			iptInterface6,
 			utilsysctl.New(),
 			execer,
 			config.IPTablesSyncPeriod.Duration,
 			config.IPTablesMinSyncPeriod.Duration,
 			config.MasqueradeAll,
 			int(*config.IPTablesMasqueradeBit),
-			config.ClusterCIDR,
+			config.ClusterCIDR4,
+			config.ClusterCIDR6,
 			hostname,
 			getNodeIP(client, hostname),
 			recorder,
@@ -277,7 +283,8 @@ func NewProxyServerDefault(config *options.ProxyServerConfig) (*ProxyServer, err
 			proxierUserspace, err = userspace.NewProxier(
 				loadBalancer,
 				net.ParseIP(config.BindAddress),
-				iptInterface,
+				// TODO: Add IPv6 interface
+				iptInterface4,
 				execer,
 				*utilnet.ParsePortRangeOrDie(config.PortRange),
 				config.IPTablesSyncPeriod.Duration,
@@ -431,16 +438,20 @@ type nodeGetter interface {
 	Get(hostname string, options metav1.GetOptions) (*api.Node, error)
 }
 
-func getProxyMode(proxyMode string, client nodeGetter, hostname string, iptver iptables.IPTablesVersioner, kcompat iptables.KernelCompatTester) string {
+func getProxyMode(proxyMode string, client nodeGetter, hostname string, iptver4 iptables.IPTablesVersioner, iptver6 iptables.IPTablesVersioner, kcompat iptables.KernelCompatTester) string {
 	if proxyMode == proxyModeUserspace {
 		return proxyModeUserspace
-	} else if proxyMode == proxyModeIPTables {
-		return tryIPTablesProxy(iptver, kcompat)
 	} else if proxyMode != "" {
 		glog.Warningf("Flag proxy-mode=%q unknown, assuming iptables proxy", proxyMode)
-		return tryIPTablesProxy(iptver, kcompat)
 	}
-	return tryIPTablesProxy(iptver, kcompat)
+	// If either IPv4 or IPv6 versioner cannot support IP tables mode, then
+	// fall back to using user space mode.
+	for _, iptver := range []iptables.IPTablesVersioner{iptver4, iptver6} {
+		if tryIPTablesProxy(iptver, kcompat) == proxyModeUserspace {
+			return proxyModeUserspace
+		}
+	}
+	return proxyModeIPTables
 }
 
 func tryIPTablesProxy(iptver iptables.IPTablesVersioner, kcompat iptables.KernelCompatTester) string {

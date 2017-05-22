@@ -41,7 +41,7 @@ func newCIDRSet(clusterCIDR *net.IPNet, subNetMaskSize int) *cidrSet {
 	maxCIDRs := 1 << uint32(subNetMaskSize-clusterMaskSize)
 	return &cidrSet{
 		clusterCIDR:     clusterCIDR,
-		clusterIP:       clusterCIDR.IP.To4(),
+		clusterIP:       clusterCIDR.IP.To16(),
 		clusterMaskSize: clusterMaskSize,
 		maxCIDRs:        maxCIDRs,
 		subNetMaskSize:  subNetMaskSize,
