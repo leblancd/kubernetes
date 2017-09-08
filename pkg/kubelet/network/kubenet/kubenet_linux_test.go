@@ -128,36 +128,55 @@ func TestGetPodNetworkStatus(t *testing.T) {
 // TestTeardownCallsShaper tests that a `TearDown` call does call
 // `shaper.Reset`
 func TestTeardownCallsShaper(t *testing.T) {
-	fexec := &fakeexec.FakeExec{
-		CommandScript: []fakeexec.FakeCommandAction{},
-		LookPathFunc: func(file string) (string, error) {
-			return fmt.Sprintf("/fake-bin/%s", file), nil
+	testCases := []struct {
+		podCIDR        string
+		ip             string
+		expectedShaper string
+	}{
+		{
+			podCIDR:        "10.0.0.1/24",
+			ip:             "10.0.0.1",
+			expectedShaper: "10.0.0.1/32",
 		},
+		// TODO: Shaper is not correct for IPv6
+		//{
+		//	podCIDR:         "2001:beef::1/48",
+		//	ip:              "2001:beef::1",
+		//	expectedShaper:  "2001:beef::1/64",
+		//},
 	}
-	fhost := nettest.NewFakeHost(nil)
-	fshaper := &bandwidth.FakeShaper{}
-	mockcni := &mock_cni.MockCNI{}
-	kubenet := newFakeKubenetPlugin(map[kubecontainer.ContainerID]string{}, fexec, fhost)
-	kubenet.cniConfig = mockcni
-	kubenet.iptables = ipttest.NewFake()
-	kubenet.bandwidthShaper = fshaper
-	kubenet.hostportSyncer = hostporttest.NewFakeHostportSyncer()
+	for _, tc := range testCases {
+		fexec := &fakeexec.FakeExec{
+			CommandScript: []fakeexec.FakeCommandAction{},
+			LookPathFunc: func(file string) (string, error) {
+				return fmt.Sprintf("/fake-bin/%s", file), nil
+			},
+		}
+		fhost := nettest.NewFakeHost(nil)
+		fshaper := &bandwidth.FakeShaper{}
+		mockcni := &mock_cni.MockCNI{}
+		kubenet := newFakeKubenetPlugin(map[kubecontainer.ContainerID]string{}, fexec, fhost)
+		kubenet.cniConfig = mockcni
+		kubenet.iptables = ipttest.NewFake()
+		kubenet.bandwidthShaper = fshaper
+		kubenet.hostportSyncer = hostporttest.NewFakeHostportSyncer()
 
-	mockcni.On("DelNetwork", mock.AnythingOfType("*libcni.NetworkConfig"), mock.AnythingOfType("*libcni.RuntimeConf")).Return(nil)
+		mockcni.On("DelNetwork", mock.AnythingOfType("*libcni.NetworkConfig"), mock.AnythingOfType("*libcni.RuntimeConf")).Return(nil)
 
-	details := make(map[string]interface{})
-	details[network.NET_PLUGIN_EVENT_POD_CIDR_CHANGE_DETAIL_CIDR] = "10.0.0.1/24"
-	kubenet.Event(network.NET_PLUGIN_EVENT_POD_CIDR_CHANGE, details)
+		details := make(map[string]interface{})
+		details[network.NET_PLUGIN_EVENT_POD_CIDR_CHANGE_DETAIL_CIDR] = tc.podCIDR
+		kubenet.Event(network.NET_PLUGIN_EVENT_POD_CIDR_CHANGE, details)
 
-	existingContainerID := kubecontainer.BuildContainerID("docker", "123")
-	kubenet.podIPs[existingContainerID] = "10.0.0.1"
+		existingContainerID := kubecontainer.BuildContainerID("docker", "123")
+		kubenet.podIPs[existingContainerID] = tc.ip
 
-	if err := kubenet.TearDownPod("namespace", "name", existingContainerID); err != nil {
-		t.Fatalf("Unexpected error in TearDownPod: %v", err)
+		if err := kubenet.TearDownPod("namespace", "name", existingContainerID); err != nil {
+			t.Fatalf("Unexpected error in TearDownPod: %v", err)
+		}
+		assert.Equal(t, []string{tc.expectedShaper}, fshaper.ResetCIDRs, "shaper.Reset should have been called")
+
+		mockcni.AssertExpectations(t)
 	}
-	assert.Equal(t, []string{"10.0.0.1/32"}, fshaper.ResetCIDRs, "shaper.Reset should have been called")
-
-	mockcni.AssertExpectations(t)
 }
 
 // TestInit tests that a `Init` call with an MTU sets the MTU
@@ -203,19 +222,22 @@ func TestInit_MTU(t *testing.T) {
 // This is how kubenet is invoked from the cri.
 func TestTearDownWithoutRuntime(t *testing.T) {
 	testCases := []struct {
-		podCIDR         string
-		ip              string
-		expectedGateway string
+		podCIDR            string
+		ip                 string
+		expectedGateway    string
+		expectedcniVersion string
 	}{
 		{
-			podCIDR:         "10.0.0.1/24",
-			ip:              "10.0.0.1",
-			expectedGateway: "10.0.0.1",
+			podCIDR:            "10.0.0.1/24",
+			ip:                 "10.0.0.1",
+			expectedGateway:    "10.0.0.1",
+			expectedcniVersion: "0.1.0",
 		},
 		{
-			podCIDR:         "2001:beef::1/48",
-			ip:              "2001:beef::1",
-			expectedGateway: "2001:beef::1",
+			podCIDR:            "2001:beef::1/48",
+			ip:                 "2001:beef::1",
+			expectedGateway:    "2001:beef::1",
+			expectedcniVersion: "0.3.1",
 		},
 	}
 	for _, tc := range testCases {
@@ -244,6 +266,9 @@ func TestTearDownWithoutRuntime(t *testing.T) {
 		}
 		if kubenet.podCidr != tc.podCIDR {
 			t.Errorf("generated podCidr: %q, expecting: %q", kubenet.podCidr, tc.podCIDR)
+		}
+		if kubenet.netConfig.Network.CNIVersion != tc.expectedcniVersion {
+			t.Errorf("generated CNIVersion: %q, expecting: %q", kubenet.netConfig.Network.CNIVersion, tc.expectedGateway)
 		}
 		existingContainerID := kubecontainer.BuildContainerID("docker", "123")
 		kubenet.podIPs[existingContainerID] = tc.ip

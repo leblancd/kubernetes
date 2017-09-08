@@ -228,6 +228,27 @@ const NET_CONFIG_TEMPLATE = `{
   }
 }`
 
+const NET_CONFIG_TEMPLATE_V6 = `{
+  "cniVersion": "0.3.1",
+  "name": "kubenet",
+  "type": "bridge",
+  "bridge": "%s",
+  "mtu": %d,
+  "addIf": "%s",
+  "isGateway": true,
+  "ipMasq": false,
+  "hairpinMode": %t,
+  "ipam": {
+    "type": "host-local",
+    "ranges": [
+    {
+     "subnet": "%s",
+     "gateway": "%s"
+    }
+    ]
+  }
+}`
+
 func (plugin *kubenetNetworkPlugin) Event(name string, details map[string]interface{}) {
 	if name != network.NET_PLUGIN_EVENT_POD_CIDR_CHANGE {
 		return
@@ -254,7 +275,14 @@ func (plugin *kubenetNetworkPlugin) Event(name string, details map[string]interf
 		// Set bridge address to first address in IPNet
 		cidr.IP[len(cidr.IP)-1] += 1
 
-		json := fmt.Sprintf(NET_CONFIG_TEMPLATE, BridgeName, plugin.mtu, network.DefaultInterfaceName, setHairpin, podCIDR, cidr.IP.String())
+		var template string
+		if cidr.IP.To4() != nil {
+			template = NET_CONFIG_TEMPLATE
+		} else {
+			template = NET_CONFIG_TEMPLATE_V6
+		}
+		json := fmt.Sprintf(template, BridgeName, plugin.mtu, network.DefaultInterfaceName, setHairpin, podCIDR, cidr.IP.String())
+
 		glog.V(2).Infof("CNI network config set to %v", json)
 		plugin.netConfig, err = libcni.ConfFromBytes([]byte(json))
 		if err == nil {
