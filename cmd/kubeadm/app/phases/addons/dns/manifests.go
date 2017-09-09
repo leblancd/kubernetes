@@ -50,7 +50,7 @@ spec:
           optional: true
       containers:
       - name: kubedns
-        image: {{ .ImageRepository }}/k8s-dns-kube-dns-{{ .Arch }}:{{ .Version }}
+        image: diverdane/k8s-dns-kube-dns-{{ .Arch }}:{{ .Version }}
         imagePullPolicy: IfNotPresent
         resources:
           # TODO: Set memory limits when we've profiled the container for large
@@ -102,7 +102,7 @@ spec:
         - name: kube-dns-config
           mountPath: /kube-dns-config
       - name: dnsmasq
-        image: {{ .ImageRepository }}/k8s-dns-dnsmasq-nanny-{{ .Arch }}:{{ .Version }}
+        image: diverdane/k8s-dns-dnsmasq-nanny-{{ .Arch }}:{{ .Version }}
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -141,7 +141,7 @@ spec:
         - name: kube-dns-config
           mountPath: /etc/k8s/dns/dnsmasq-nanny
       - name: sidecar
-        image: {{ .ImageRepository }}/k8s-dns-sidecar-{{ .Arch }}:{{ .Version }}
+        image: diverdane/k8s-dns-sidecar-{{ .Arch }}:{{ .Version }}
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -155,8 +155,8 @@ spec:
         args:
         - --v=2
         - --logtostderr
-        - --probe=kubedns,127.0.0.1:10053,kubernetes.default.svc.{{ .DNSDomain }},5,A
-        - --probe=dnsmasq,127.0.0.1:53,kubernetes.default.svc.{{ .DNSDomain }},5,A
+        - --probe=kubedns,127.0.0.1:10053,kubernetes.default.svc.{{ .DNSDomain }},5,SRV
+        - --probe=dnsmasq,127.0.0.1:53,kubernetes.default.svc.{{ .DNSDomain }},5,SRV
         ports:
         - containerPort: 10054
           name: metrics
