@@ -19,6 +19,7 @@ package framework
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -874,7 +875,8 @@ func (j *ServiceTestJig) GetHTTPContent(host string, port int, timeout time.Dura
 }
 
 func testHTTPHealthCheckNodePort(ip string, port int, request string) (bool, error) {
-	url := fmt.Sprintf("http://%s:%d%s", ip, port, request)
+	ipPort := net.JoinHostPort(ip, strconv.Itoa(port))
+	url := fmt.Sprintf("http://%s%s", ipPort, request)
 	if ip == "" || port == 0 {
 		Failf("Got empty IP for reachability check (%s)", url)
 		return false, fmt.Errorf("Invalid input ip or port")
@@ -1288,8 +1290,9 @@ func VerifyServeHostnameServiceUp(c clientset.Interface, ns, host string, expect
 	// Loop a bunch of times - the proxy is randomized, so we want a good
 	// chance of hitting each backend at least once.
 	buildCommand := func(wget string) string {
-		return fmt.Sprintf("for i in $(seq 1 %d); do %s http://%s:%d 2>&1 || true; echo; done",
-			50*len(expectedPods), wget, serviceIP, servicePort)
+		serviceIPPort := net.JoinHostPort(serviceIP, strconv.Itoa(servicePort))
+		return fmt.Sprintf("for i in $(seq 1 %d); do %s http://%s 2>&1 || true; echo; done",
+			50*len(expectedPods), wget, serviceIPPort)
 	}
 	commands := []func() string{
 		// verify service from node
