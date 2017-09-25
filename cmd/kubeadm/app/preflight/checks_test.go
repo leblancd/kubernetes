@@ -184,6 +184,12 @@ func TestRunInitMasterChecks(t *testing.T) {
 			},
 			expected: false,
 		},
+		{name: "Test valid advertised IPv6 address",
+			cfg: &kubeadmapi.MasterConfiguration{
+				API: kubeadmapi.API{AdvertiseAddress: "2001:1234::1:15"},
+			},
+			expected: false,
+		},
 		{
 			name: "Test CA file exists if specfied",
 			cfg: &kubeadmapi.MasterConfiguration{
@@ -227,6 +233,18 @@ func TestRunJoinNodeChecks(t *testing.T) {
 	}{
 		{
 			cfg:      &kubeadmapi.NodeConfiguration{},
+			expected: false,
+		},
+		{
+			cfg: &kubeadmapi.NodeConfiguration{
+				DiscoveryTokenAPIServers: []string{"192.168.1.15"},
+			},
+			expected: false,
+		},
+		{
+			cfg: &kubeadmapi.NodeConfiguration{
+				DiscoveryTokenAPIServers: []string{"2001:1234::1:15"},
+			},
 			expected: false,
 		},
 	}
