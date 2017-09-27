@@ -203,6 +203,7 @@ type NoopNetworkPlugin struct {
 }
 
 const sysctlBridgeCallIPTables = "net/bridge/bridge-nf-call-iptables"
+const sysctlBridgeCallIP6Tables = "net/bridge/bridge-nf-call-ip6tables"
 
 func (plugin *NoopNetworkPlugin) Init(host Host, hairpinMode kubeletconfig.HairpinMode, nonMasqueradeCIDR string, mtu int) error {
 	// Set bridge-nf-call-iptables=1 to maintain compatibility with older
@@ -216,6 +217,13 @@ func (plugin *NoopNetworkPlugin) Init(host Host, hairpinMode kubeletconfig.Hairp
 	utilexec.New().Command("modprobe", "br-netfilter").CombinedOutput()
 	if err := utilsysctl.New().SetSysctl(sysctlBridgeCallIPTables, 1); err != nil {
 		glog.Warningf("can't set sysctl %s: %v", sysctlBridgeCallIPTables, err)
+	}
+	if val, err := utilsysctl.New().GetSysctl(sysctlBridgeCallIP6Tables); err == nil {
+		if val != 1 {
+			if err = utilsysctl.New().SetSysctl(sysctlBridgeCallIP6Tables, 1); err != nil {
+				glog.Warningf("can't set sysctl %s: %v", sysctlBridgeCallIP6Tables, err)
+			}
+		}
 	}
 
 	return nil
