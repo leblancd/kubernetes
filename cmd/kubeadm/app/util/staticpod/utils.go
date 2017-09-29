@@ -19,12 +19,18 @@ package staticpod
 import (
 	"fmt"
 	"io/ioutil"
+	"net"
+	"net/url"
 	"os"
+	"strings"
 
 	"k8s.io/api/core/v1"
+
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util"
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
@@ -63,12 +69,11 @@ func ComponentResources(cpu string) v1.ResourceRequirements {
 }
 
 // ComponentProbe is a helper function building a ready v1.Probe object from some simple parameters
-func ComponentProbe(port int, path string, scheme v1.URIScheme) *v1.Probe {
+func ComponentProbe(cfg *kubeadmapi.MasterConfiguration, componentName string, port int, path string, scheme v1.URIScheme) *v1.Probe {
 	return &v1.Probe{
 		Handler: v1.Handler{
 			HTTPGet: &v1.HTTPGetAction{
-				// Host has to be set to "127.0.0.1" here due to that our static Pods are on the host's network
-				Host:   "127.0.0.1",
+				Host:   GetProbeAddress(cfg, componentName),
 				Path:   path,
 				Port:   intstr.FromInt(port),
 				Scheme: scheme,
@@ -139,4 +144,66 @@ func WriteStaticPodToDisk(componentName, manifestDir string, pod v1.Pod) error {
 	}
 
 	return nil
+}
+
+// GetProbeAddress returns an IP address or 127.0.0.1 to use for liveness probes
+// in static pod manifests. For etcd, GetProbeAddress will use the first
+// listen-client-url if multiple urls are provided. If the listen-client-url
+// contains a hostname instead of an IP address, GetProbeAddress will use the
+// local resolver for name resolution or 127.0.0.1 if the name can not be resolved.
+func GetProbeAddress(cfg *kubeadmapi.MasterConfiguration, componentName string) string {
+	switch {
+	case componentName == kubeadmconstants.KubeAPIServer:
+		if cfg.API.AdvertiseAddress != "" {
+			return cfg.API.AdvertiseAddress
+		}
+	case componentName == kubeadmconstants.KubeScheduler:
+		if cfg.SchedulerExtraArgs != nil {
+			addr, exists := cfg.SchedulerExtraArgs["address"]
+			if exists {
+				return addr
+			}
+		}
+	case componentName == kubeadmconstants.KubeControllerManager:
+		if cfg.ControllerManagerExtraArgs != nil {
+			addr, exists := cfg.ControllerManagerExtraArgs["address"]
+			if exists {
+				return addr
+			}
+		}
+	case componentName == kubeadmconstants.Etcd:
+		if cfg.Etcd.ExtraArgs != nil {
+			arg, exists := cfg.Etcd.ExtraArgs["listen-client-urls"]
+			if exists {
+				if strings.ContainsAny(arg, ",") {
+					arg = strings.Split(arg, ",")[0]
+				}
+				parsedURL, err := url.Parse(arg)
+				if err != nil || parsedURL.Hostname() == "" {
+					break
+				}
+				if ip := net.ParseIP(parsedURL.Hostname()); ip != nil {
+					return ip.String()
+				}
+				addrs, err := net.LookupIP(parsedURL.Hostname())
+				if err != nil {
+					break
+				}
+				var ip net.IP
+				for _, addr := range addrs {
+					if addr.To4() != nil {
+						ip = addr
+						break
+					}
+					if addr.To16() != nil && ip == nil {
+						ip = addr
+					}
+				}
+				if ip != nil {
+					return ip.String()
+				}
+			}
+		}
+	}
+	return "127.0.0.1"
 }
