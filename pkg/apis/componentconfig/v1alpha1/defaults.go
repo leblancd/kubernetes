@@ -67,9 +67,10 @@ func SetDefaults_KubeProxyConfiguration(obj *KubeProxyConfiguration) {
 	// If ConntrackMax is set, respect it.
 	if obj.Conntrack.Max == 0 {
 		// If ConntrackMax is *not* set, use per-core scaling.
-		if obj.Conntrack.MaxPerCore == 0 {
-			obj.Conntrack.MaxPerCore = 32 * 1024
-		}
+		// PCM
+		// if obj.Conntrack.MaxPerCore == 0 {
+		// 	obj.Conntrack.MaxPerCore = 32 * 1024
+		// }
 		if obj.Conntrack.Min == 0 {
 			obj.Conntrack.Min = 128 * 1024
 		}
