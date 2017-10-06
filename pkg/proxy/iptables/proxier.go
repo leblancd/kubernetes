@@ -953,7 +953,7 @@ func (esp *endpointServicePair) IPPart() string {
 func (proxier *Proxier) deleteEndpointConnections(connectionMap map[endpointServicePair]bool) {
 	for epSvcPair := range connectionMap {
 		if svcInfo, ok := proxier.serviceMap[epSvcPair.servicePortName]; ok && svcInfo.protocol == api.ProtocolUDP {
-			endpointIP := epSvcPair.endpoint[0:strings.Index(epSvcPair.endpoint, ":")]
+			endpointIP := epSvcPair.IPPart()
 			err := utilproxy.ClearUDPConntrackForPeers(proxier.exec, svcInfo.clusterIP.String(), endpointIP)
 			if err != nil {
 				glog.Errorf("Failed to delete %s endpoint connections, error: %v", epSvcPair.servicePortName.String(), err)
