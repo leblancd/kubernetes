@@ -55,6 +55,7 @@ import (
 
 const (
 	bridgenf                    = "/proc/sys/net/bridge/bridge-nf-call-iptables"
+	bridgenf6                   = "/proc/sys/net/bridge/bridge-nf-call-ip6tables"
 	externalEtcdRequestTimeout  = time.Duration(10 * time.Second)
 	externalEtcdRequestRetries  = 3
 	externalEtcdRequestInterval = time.Duration(5 * time.Second)
@@ -691,6 +692,13 @@ func RunInitMasterChecks(cfg *kubeadmapi.MasterConfiguration) error {
 		}
 	}
 
+	if ip := net.ParseIP(cfg.API.AdvertiseAddress); ip != nil {
+		if ip.To4() == nil && ip.To16() != nil {
+			checks = append(checks,
+				FileContentCheck{Path: bridgenf6, Content: []byte{'1'}},
+			)
+		}
+	}
 	return RunChecks(checks, os.Stderr)
 }
 
@@ -725,6 +733,15 @@ func RunJoinNodeChecks(cfg *kubeadmapi.NodeConfiguration) error {
 		InPathCheck{executable: "touch", mandatory: false},
 	}
 
+	if len(cfg.DiscoveryTokenAPIServers) > 0 {
+		if ip := net.ParseIP(cfg.DiscoveryTokenAPIServers[0]); ip != nil {
+			if ip.To4() == nil && ip.To16() != nil {
+				checks = append(checks,
+					FileContentCheck{Path: bridgenf6, Content: []byte{'1'}},
+				)
+			}
+		}
+	}
 	return RunChecks(checks, os.Stderr)
 }
 
