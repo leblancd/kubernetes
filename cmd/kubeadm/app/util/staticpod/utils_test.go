@@ -17,6 +17,8 @@ limitations under the License.
 package staticpod
 
 import (
+	"net"
+	"net/url"
 	"reflect"
 	"sort"
 	"testing"
@@ -24,6 +26,9 @@ import (
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
+	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 )
 
 func TestComponentResources(t *testing.T) {
@@ -37,43 +42,162 @@ func TestComponentResources(t *testing.T) {
 
 func TestComponentProbe(t *testing.T) {
 	var tests = []struct {
-		port   int
-		path   string
-		scheme v1.URIScheme
+		name      string
+		cfg       *kubeadmapi.MasterConfiguration
+		component string
+		port      int
+		path      string
+		scheme    v1.URIScheme
 	}{
 		{
-			port:   1,
-			path:   "foo",
-			scheme: v1.URISchemeHTTP,
+			name: "default apiserver advertise address with http",
+			cfg: &kubeadmapi.MasterConfiguration{
+				API: kubeadmapi.API{
+					AdvertiseAddress: "",
+				},
+			},
+			component: kubeadmconstants.KubeAPIServer,
+			port:      1,
+			path:      "foo",
+			scheme:    v1.URISchemeHTTP,
 		},
 		{
-			port:   2,
-			path:   "bar",
-			scheme: v1.URISchemeHTTPS,
+			name: "default apiserver advertise address with https",
+			cfg: &kubeadmapi.MasterConfiguration{
+				API: kubeadmapi.API{
+					AdvertiseAddress: "",
+				},
+			},
+			component: kubeadmconstants.KubeAPIServer,
+			port:      2,
+			path:      "bar",
+			scheme:    v1.URISchemeHTTPS,
+		},
+		{
+			name: "valid ipv4 apiserver advertise address with http",
+			cfg: &kubeadmapi.MasterConfiguration{
+				API: kubeadmapi.API{
+					AdvertiseAddress: "1.2.3.4",
+				},
+			},
+			component: kubeadmconstants.KubeAPIServer,
+			port:      1,
+			path:      "foo",
+			scheme:    v1.URISchemeHTTP,
+		},
+		{
+			name: "valid IPv4 scheduler probe",
+			cfg: &kubeadmapi.MasterConfiguration{
+				SchedulerExtraArgs: map[string]string{"address": "1.2.3.4"},
+			},
+			component: kubeadmconstants.KubeScheduler,
+			port:      1,
+			path:      "foo",
+			scheme:    v1.URISchemeHTTP,
+		},
+		{
+			name: "valid etcd probe using listen-client-urls IPv4 addresses",
+			cfg: &kubeadmapi.MasterConfiguration{
+				Etcd: kubeadmapi.Etcd{
+					ExtraArgs: map[string]string{
+						"listen-client-urls": "http://1.2.3.4:2379,http://4.3.2.1:2379"},
+				},
+			},
+			component: kubeadmconstants.Etcd,
+			port:      1,
+			path:      "foo",
+			scheme:    v1.URISchemeHTTP,
+		},
+		{
+			name: "valid IPv4 etcd probe using hostname for listen-client-urls",
+			cfg: &kubeadmapi.MasterConfiguration{
+				Etcd: kubeadmapi.Etcd{
+					ExtraArgs: map[string]string{
+						"listen-client-urls": "http://localhost:2379"},
+				},
+			},
+			component: kubeadmconstants.Etcd,
+			port:      1,
+			path:      "foo",
+			scheme:    v1.URISchemeHTTP,
 		},
 	}
 	for _, rt := range tests {
-		actual := ComponentProbe(rt.port, rt.path, rt.scheme)
+		actual := ComponentProbe(rt.cfg, rt.component, rt.port, rt.path, rt.scheme)
+		switch {
+		case rt.component == kubeadmconstants.KubeAPIServer:
+			if rt.cfg.API.AdvertiseAddress == "" &&
+				actual.Handler.HTTPGet.Host != "127.0.0.1" {
+				t.Errorf("%s test case failed:\n\texpected: %s\n\t  actual: %s",
+					rt.name, "127.0.0.1",
+					actual.Handler.HTTPGet.Host)
+			}
+			if rt.cfg.API.AdvertiseAddress != "" &&
+				actual.Handler.HTTPGet.Host != rt.cfg.API.AdvertiseAddress {
+				t.Errorf("%s test case failed:\n\texpected: %s\n\t  actual: %s",
+					rt.name, rt.cfg.API.AdvertiseAddress,
+					actual.Handler.HTTPGet.Host)
+			}
+		case rt.component == kubeadmconstants.KubeScheduler:
+			if actual.Handler.HTTPGet.Host != rt.cfg.SchedulerExtraArgs["address"] {
+				t.Errorf("%s test case failed:\n\texpected: %s\n\t  actual: %s",
+					rt.name, rt.cfg.SchedulerExtraArgs["address"],
+					actual.Handler.HTTPGet.Host)
+			}
+		case rt.component == kubeadmconstants.KubeControllerManager:
+			if actual.Handler.HTTPGet.Host != rt.cfg.ControllerManagerExtraArgs["address"] {
+				t.Errorf("%s test case failed:\n\texpected: %s\n\t  actual: %s",
+					rt.name, rt.cfg.ControllerManagerExtraArgs["address"],
+					actual.Handler.HTTPGet.Host)
+			}
+		case rt.component == kubeadmconstants.Etcd:
+			arg, exists := rt.cfg.Etcd.ExtraArgs["listen-client-urls"]
+			if exists {
+				u, err := url.Parse(arg)
+				if err != nil || u.Hostname() == "" {
+					if actual.Handler.HTTPGet.Host != "127.0.0.1" {
+						t.Errorf("%s test case failed:\n\texpected: %s\n\t  actual: %s",
+							rt.name, "127.0.0.1", actual.Handler.HTTPGet.Host)
+					}
+				}
+				if addr := net.ParseIP(u.Hostname()); addr != nil {
+					if actual.Handler.HTTPGet.Host != addr.String() {
+						t.Errorf("%s test case failed:\n\texpected: %s\n\t  actual: %s",
+							rt.name, addr.String(), actual.Handler.HTTPGet.Host)
+					}
+				} else {
+					var ip net.IP
+					addrs, _ := net.LookupIP(u.Hostname())
+					for _, addr := range addrs {
+						if addr.To4() != nil {
+							ip = addr
+							break
+						}
+						if addr.To16() != nil && ip == nil {
+							ip = addr
+						}
+					}
+					if actual.Handler.HTTPGet.Host != ip.String() {
+						t.Errorf("%s test case failed:\n\texpected: %s\n\t  actual: %s",
+							rt.name, ip.String(), actual.Handler.HTTPGet.Host)
+					}
+				}
+			}
+		}
 		if actual.Handler.HTTPGet.Port != intstr.FromInt(rt.port) {
-			t.Errorf(
-				"failed componentProbe:\n\texpected: %v\n\t  actual: %v",
-				rt.port,
-				actual.Handler.HTTPGet.Port,
-			)
+			t.Errorf("%s test case failed:\n\texpected: %v\n\t  actual: %v",
+				rt.name, rt.port,
+				actual.Handler.HTTPGet.Port)
 		}
 		if actual.Handler.HTTPGet.Path != rt.path {
-			t.Errorf(
-				"failed componentProbe:\n\texpected: %s\n\t  actual: %s",
-				rt.path,
-				actual.Handler.HTTPGet.Path,
-			)
+			t.Errorf("%s test case failed:\n\texpected: %s\n\t  actual: %s",
+				rt.name, rt.path,
+				actual.Handler.HTTPGet.Path)
 		}
 		if actual.Handler.HTTPGet.Scheme != rt.scheme {
-			t.Errorf(
-				"failed componentProbe:\n\texpected: %v\n\t  actual: %v",
-				rt.scheme,
-				actual.Handler.HTTPGet.Scheme,
-			)
+			t.Errorf("%s test case failed:\n\texpected: %v\n\t  actual: %v",
+				rt.name, rt.scheme,
+				actual.Handler.HTTPGet.Scheme)
 		}
 	}
 }
