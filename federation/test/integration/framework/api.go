@@ -18,7 +18,9 @@ package framework
 
 import (
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"testing"
 
 	"github.com/pborman/uuid"
@@ -70,7 +72,9 @@ func (f *FederationAPIFixture) SetUpWithRunOptions(t *testing.T, runOptions *opt
 		t.Fatal(err)
 	}
 
-	f.Host = fmt.Sprintf("http://%s:%d", runOptions.InsecureServing.BindAddress, runOptions.InsecureServing.BindPort)
+	ip := runOptions.InsecureServing.BindAddress.String()
+	port := strconv.Itoa(runOptions.InsecureServing.BindPort)
+	f.Host = fmt.Sprintf("http://%s", net.JoinHostPort(ip, port))
 
 	err = waitForServer(t, f.Host)
 	if err != nil {
